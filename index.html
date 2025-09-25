@@ -1,17 +1,104 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-  <head>
-    <title>nosleep</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-  </head>
-  <body>
-    <script src="NoSleep.min.js"></script>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>wakelock inactive</title>
+<style>
+  html,body{height:100%;margin:0;background:#000}
+</style>
+</head>
+<body>
+<script>
+(async function(){
+  // state holders
+  let sentinel = null;
+  let noSleep = null;
 
-    <script>
-      var noSleep = new NoSleep();
+  // title helpers
+  const setInactive = ()=> document.title = 'wakelock inactive';
+  const setActiveNative = ()=> document.title = 'wakelock active: native';
+  const setActiveFallback = ()=> document.title = 'wakelock active: fallback';
 
+  setInactive();
+
+  async function enableFallback(){
+    try{
+      if(!noSleep){
+        await new Promise((resolve,reject)=>{
+          const s = document.createElement('script');
+          s.src = 'https://richtr.github.io/NoSleep.js/dist/NoSleep.min.js';
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
+        // NoSleep should now be available
+        noSleep = new NoSleep();
+      }
       noSleep.enable();
-      document.body.style.backgroundColor = "black";
-    </script>
-  </body>
+      setActiveFallback();
+      return true;
+    }catch(err){
+      console.error('fallback enable failed', err);
+      setInactive();
+      return false;
+    }
+  }
+
+  async function requestWake(){
+    try{
+      // prefer native API
+      if('wakeLock' in navigator){
+        try{
+          sentinel = await navigator.wakeLock.request('screen');
+          setActiveNative();
+          // update if released later
+          if(sentinel && typeof sentinel.addEventListener === 'function'){
+            sentinel.addEventListener('release', ()=> {
+              // mark inactive on release
+              setInactive();
+            });
+          }
+          return;
+        }catch(errNative){
+          // native failed (perhaps blocked) -> try fallback
+          console.warn('native wakeLock failed:', errNative);
+          await enableFallback();
+          return;
+        }
+      } else {
+        // no native support -> fallback
+        await enableFallback();
+        return;
+      }
+    }catch(e){
+      console.error('requestWake error', e);
+      setInactive();
+    }
+  }
+
+  // initial attempt (paste+Enter or bookmarklet click often counts as a gesture)
+  requestWake();
+
+  // re-request on visibilitychange (some platforms drop the lock)
+  document.addEventListener('visibilitychange', ()=>{
+    if(!document.hidden){
+      // if native is available but we have no active sentinel or it was released, try again
+      const nativePossible = ('wakeLock' in navigator);
+      const sentinelReleased = sentinel && ('released' in sentinel) ? !!sentinel.released : false;
+      if(nativePossible){
+        if(!sentinel || sentinelReleased) requestWake();
+      } else {
+        // for fallback, if noSleep isn't present try again
+        if(!noSleep) requestWake();
+      }
+    }
+  });
+
+  // in case automatic activation was blocked, a single click will act as the gesture
+  document.addEventListener('click', ()=>{
+    if(document.title.indexOf('inactive') !== -1) requestWake();
+  }, {once:true, passive:true});
+})();
+</script>
+</body>
 </html>
